@@ -1,0 +1,26 @@
+{
+  "name": "e-voting-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tri-Modular E-Voting System with Poseidon ZKP and Candidate Verified Content",
+  "workspaces": [
+    "contracts",
+    "server",
+    "frontend",
+    "scripts"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=frontend",
+    "dev:server": "npm run dev --workspace=server",
+    "test:contracts": "npm run test --workspace=contracts",
+    "test:server": "npm run test --workspace=server",
+    "test:frontend": "npm run test --workspace=frontend",
+    "test": "npm run test:contracts",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present"
+  },
+  "devDependencies": {
+    "prettier": "^3.2.5",
+    "typescript": "^5.4.5"
+  }
+}

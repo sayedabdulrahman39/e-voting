@@ -1,0 +1,110 @@
+# memory.md: Persistent Project Memory
+
+> The agent MUST read this file first and update it at the end of every phase and after every
+> important decision, deployment, schema change, or gotcha. Keep entries short and factual.
+> Never store secrets, private keys, or real `.env` values here.
+
+---
+
+## 1. Project Snapshot
+- **Name:** Tri-Modular E-Voting (Poseidon ZKP + Candidate Verified Content)
+- **Type:** Final-year engineering project, prototype
+- **Stack:** Circom 2.1.x + snarkjs (Groth16) | Solidity + Hardhat + ethers v6 | Supabase | Express (relayer) | React + Vite + TS
+- **Networks:** Hardhat local (dev) -> Sepolia (demo); backup: Polygon Amoy
+- **Source-of-truth docs:** `PRD.md` (scope), `TRD.md` (technical), `phases.md` (order)
+
+## 2. Current Status
+- **Current phase:** Phase 1 (Completed) -> Ready for Phase 2: ZK Circuit
+- **Last completed phase:** Phase 1: Database, Auth, Roles (Supabase Schema & Realtime Sync)
+- **Next action:** Phase 2: ZK Circuit (Circom 2.1 vote.circom & Groth16 Setup)
+- **Blockers:** none
+
+## 3. Decisions Log (append-only)
+| # | Date | Decision | Reason |
+|---|---|---|---|
+| D1 | | EVM chain required | snarkjs Solidity verifier uses BN254 precompiles |
+| D2 | | `candidateId` is a **public** circuit signal | Simple, correct tallying; anonymity from nullifier + membership |
+| D3 | | Relayer submits votes; no voter wallets in DB | Prevents linking user to transaction |
+| D4 | | `/api/vote` unauthenticated | Proof is the authorization; avoids user-to-vote link |
+| D5 | | Merkle path computed in browser from public commitment list | Server must not learn voter's leaf |
+| D6 | | `voter_commitments` has no `user_id` | Unlinkable commitments |
+| D7 | | `recipient` public signal bound to `msg.sender` | Anti-front-running / replay |
+| D8 | | Manifesto attestation = integrity only (keccak256) | Cannot prove truthfulness; wording in report must reflect this |
+| D9 | | Cosine similarity uses mean-centred ratings (1-5, minus 3) | Raw cosine ignores magnitude and gives near-identical scores |
+| D10 | | Tree depth 16, Poseidon(2), empty leaf 0 | ~65k voters; fast enough in browser |
+
+*(Add new rows below; never edit old rows, supersede them instead.)*
+
+## 4. Deviations from the Source Paper (keep for the report)
+- Paper hides the vote inside `Poseidon(candidate, blinding)` but never explains tallying; we use a public `candidateId` instead (hidden-vote commit-reveal is a stretch goal).
+- Paper stores voter wallet address in DB; we use a relayer and store none.
+- Paper fetches the Merkle proof from the server (server learns the leaf); we compute it client-side.
+- Paper compares a local-Hardhat latency to another paper's number; we report Hardhat and Sepolia separately and don't claim a direct comparison.
+- Paper's AI module is described inconsistently; ours is advisory stance matching only.
+
+## 5. Technical Facts (fill in as discovered)
+- **Circuit public signal order:** `TBD` (verify from `public.json` / `Verifier.sol`; expected `[merkleRoot, nullifier, electionId, recipient, candidateId]`)
+- **Constraint count (depth 16):** TBD
+- **Powers of Tau size used:** TBD
+- **Poseidon vs SHA-256 constraints:** TBD
+- **Proof generation time (browser, depth 16):** TBD
+- **castVote gas:** TBD
+
+### Deployed contracts
+| Network | VoterRegistry | Voting | Groth16Verifier | ContentAttestation |
+|---|---|---|---|---|
+| hardhat (local) | TBD | TBD | TBD | TBD |
+| sepolia | TBD | TBD | TBD | TBD |
+
+*(Addresses are public; keys are not. Re-deploy invalidates old addresses, so update this table.)*
+
+## 6. Conventions
+- TypeScript strict; ESLint + Prettier; conventional commits
+- Solidity ^0.8.20, custom errors, NatSpec on public functions
+- Env via `.env` (git-ignored) with `.env.example` committed
+- Circuit change => rebuild keys => regenerate `Groth16Verifier.sol` => copy wasm/zkey to frontend => redeploy contracts => update this file
+- Normalize manifesto text before hashing: trim, `\r\n` -> `\n`
+- All reported numbers come from scripts in `/scripts`, never hand-written
+
+## 7. Known Gotchas (append as found)
+- Circom orders public signals as outputs first, then public inputs; always verify.
+- `recipient` and `candidateId` must be constrained (dummy square) or the compiler may drop them.
+- Never reuse the same `final.zkey` with a changed circuit.
+- Service-role key must never reach the browser.
+- Lost voter secret = cannot vote; backup step is mandatory.
+
+## 8. Open Questions
+- [ ] Final deployment network for demo: Sepolia or Polygon Amoy?
+- [ ] Number of demo voters/candidates for viva?
+- [ ] University requirements for report format and plagiarism limits on cited paper?
+
+## 9. Phase Completion Log (append one entry per phase)
+### Phase 0: Setup and Skeleton (2026-10-01)
+- **Built:** Monorepo structure with npm workspaces (`contracts/`, `server/`, `frontend/`, `circuits/`, `supabase/`, `docs/`), Hardhat config & smoke test, Express relayer API skeleton with security middleware & health endpoint, Vite + React + Tailwind CSS interactive dashboard UI, Supabase migration 001, `.env.example`, `.gitignore`, and root README.
+- **How to run:**
+  - `npm run test:contracts` (runs Hardhat test suite)
+  - `npm run dev` (starts frontend at http://localhost:5173)
+  - `npm run dev:server` (starts relayer API at http://localhost:3001)
+  - `npm run build` (builds all workspaces cleanly)
+- **Evidence (commands + results):**
+  - `npm run test:contracts`: 1 passing smoke test (Hardhat provider & accounts verified).
+  - `npm run build`: successfully built `@evoting/server` (tsc) and `@evoting/frontend` (vite).
+- **Known limitations:** Circom binary to be configured/compiled in Phase 2; Supabase credentials to be configured in `.env` for Phase 1.
+- **Next:** Phase 1: Database, Auth, Roles (Supabase schema, RLS policies, trigger, and auth shell).
+
+### Phase 1: Database, Auth, Roles (2026-10-01)
+- **Built:**
+  - Production Postgres schema migration ([001_full_schema.sql](file:///d:/Desktop/e-voting/supabase/migrations/001_full_schema.sql)) with `profiles`, `elections`, `candidates`, `voter_eligibility`, `voter_commitments` (no `user_id` for privacy), and `audit_log`.
+  - Security Definer helper `is_admin()`.
+  - Comprehensive Row-Level Security (RLS) policies for all tables.
+  - Supabase Auth signup trigger creating user profiles automatically.
+  - Realtime publication on `elections`, `candidates`, `voter_commitments`, and `audit_log`.
+  - Frontend Supabase service layer ([supabaseService.ts](file:///d:/Desktop/e-voting/frontend/src/lib/supabaseService.ts)) with live data fetch, realtime event sync, and local fallback.
+  - Development seed data ([seed.sql](file:///d:/Desktop/e-voting/supabase/seed.sql)).
+- **How to run:**
+  - Run SQL migrations in Supabase SQL Editor: `supabase/migrations/001_full_schema.sql` and `supabase/seed.sql`.
+  - Add your Supabase project URL & Anon key to `.env`.
+  - Start frontend: `npm run dev` (connects in realtime automatically).
+- **Evidence (commands + results):**
+  - `npm run build`: built clean bundle with `@supabase/supabase-js` realtime support.
+- **Next:** Phase 2: ZK Circuit (`circuits/vote.circom`, Poseidon Merkle tree, Powers of Tau ceremony, Groth16 keys).

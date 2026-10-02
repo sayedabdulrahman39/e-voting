@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+dist/
+build/
+.cache/
+
+# Environment Variables & Keys
+.env
+.env.local
+.env.*.local
+*.private.key
+*.pem
+
+# Hardhat & Solhint
+cache/
+artifacts/
+typechain-types/
+
+# ZK Proof Artifacts & Keys (large & sensitive)
+circuits/build/
+circuits/*.r1cs
+circuits/*.zkey
+circuits/*.ptau
+circuits/*.sym
+circuits/*_js/
+
+# Supabase Local
+.branches/
+.temp/
+
+# Logs & OS
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
