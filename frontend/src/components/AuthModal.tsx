@@ -131,20 +131,22 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       setIsPreseededVoter(isPreseeded);
 
       // If voter is manually enrolled, or dynamic OTP is requested:
+      let activeVoter = voter;
       if (!isPreseeded || forceDynamic) {
         setEmailSending(true);
-        const { otp, expiresAt } = await generateAndSaveVoterOtp(voter, 2);
+        const { otp, expiresAt, updatedVoter } = await generateAndSaveVoterOtp(voter, 2);
         setLiveDispatchedOtp(otp);
         setOtpExpiresAt(expiresAt);
         setSecondsRemaining(120);
         setEmailSending(false);
+        activeVoter = updatedVoter;
       } else {
         setLiveDispatchedOtp("123");
         setOtpExpiresAt("");
         setSecondsRemaining(120);
       }
 
-      setFoundVoter(voter);
+      setFoundVoter(activeVoter);
       setVoterOtpInput("");
       setOtpSent(true);
     } catch (err: any) {
@@ -162,10 +164,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setEmailSending(true);
 
     try {
-      const { otp, expiresAt } = await generateAndSaveVoterOtp(foundVoter, 2);
+      const { otp, expiresAt, updatedVoter } = await generateAndSaveVoterOtp(foundVoter, 2);
       setLiveDispatchedOtp(otp);
       setOtpExpiresAt(expiresAt);
       setSecondsRemaining(120);
+      setFoundVoter(updatedVoter);
       setVoterOtpInput("");
     } catch (err: any) {
       setErrorMsg(err.message || "Failed to resend verification OTP.");
@@ -182,7 +185,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setLoading(true);
 
     try {
-      const result = await verifyVoterOtp(foundVoter.voterIdNumber, voterOtpInput);
+      const result = await verifyVoterOtp(foundVoter.voterIdNumber, voterOtpInput, foundVoter);
       if (!result.valid) {
         throw new Error(result.error || "Invalid or expired OTP code.");
       }

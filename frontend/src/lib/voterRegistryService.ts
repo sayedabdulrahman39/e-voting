@@ -281,10 +281,16 @@ export async function findVoterByIdOrEmail(identifier: string): Promise<VoterRec
 export async function generateAndSaveVoterOtp(
   voter: VoterRecord,
   expiresInMinutes = 2
-): Promise<{ otp: string; expiresAt: string; emailDispatched: boolean }> {
+): Promise<{ otp: string; expiresAt: string; emailDispatched: boolean; updatedVoter: VoterRecord }> {
   // Generate dynamic 6-digit OTP
   const dynamicOtp = Math.floor(100000 + Math.random() * 900000).toString();
   const expiresAt = new Date(Date.now() + expiresInMinutes * 60 * 1000).toISOString();
+
+  const updatedVoter: VoterRecord = {
+    ...voter,
+    otpCode: dynamicOtp,
+    otpExpiresAt: expiresAt,
+  };
 
   // 1. Update in Supabase
   if (supabase) {
@@ -305,14 +311,19 @@ export async function generateAndSaveVoterOtp(
     }
   }
 
-  // 2. Update in Local Storage
+  // 2. Update in Local Storage (Upsert voter into local registry cache)
   const current = getRegisteredVoters();
-  const updated = current.map((v) =>
-    v.voterIdNumber.toUpperCase() === voter.voterIdNumber.toUpperCase()
-      ? { ...v, otpCode: dynamicOtp, otpExpiresAt: expiresAt }
-      : v
+  const exists = current.some(
+    (v) => v.voterIdNumber.toUpperCase() === voter.voterIdNumber.toUpperCase()
   );
-  saveRegisteredVotersLocally(updated);
+  const updatedList = exists
+    ? current.map((v) =>
+        v.voterIdNumber.toUpperCase() === voter.voterIdNumber.toUpperCase()
+          ? updatedVoter
+          : v
+      )
+    : [...current, updatedVoter];
+  saveRegisteredVotersLocally(updatedList);
 
   // 3. Dispatch Email via Relayer Server
   let emailDispatched = false;
@@ -334,14 +345,15 @@ export async function generateAndSaveVoterOtp(
     console.warn("Relayer email OTP dispatch fallback:", err);
   }
 
-  return { otp: dynamicOtp, expiresAt, emailDispatched };
+  return { otp: dynamicOtp, expiresAt, emailDispatched, updatedVoter };
 }
 
 export async function verifyVoterOtp(
   identifier: string,
-  enteredOtp: string
+  enteredOtp: string,
+  inMemoryVoter?: VoterRecord | null
 ): Promise<{ valid: boolean; error?: string; voter?: VoterRecord }> {
-  const voter = await findVoterByIdOrEmail(identifier);
+  const voter = inMemoryVoter || (await findVoterByIdOrEmail(identifier));
   if (!voter) {
     return { valid: false, error: `No registered voter found for '${identifier}'.` };
   }
@@ -367,9 +379,26 @@ export async function verifyVoterOtp(
     }
   }
 
-  // Check Code Match
+  // Check Code Match with in-memory / database voter.otpCode
   if (voter.otpCode && cleanOtp === voter.otpCode.trim()) {
     return { valid: true, voter };
+  }
+
+  // Check local cache backup
+  const cachedVoters = getRegisteredVoters();
+  const cached = cachedVoters.find(
+    (v) =>
+      v.voterIdNumber.toUpperCase() === voter.voterIdNumber.toUpperCase() ||
+      (v.email && voter.email && v.email.toLowerCase() === voter.email.toLowerCase())
+  );
+  if (cached?.otpCode && cleanOtp === cached.otpCode.trim()) {
+    if (cached.otpExpiresAt && Date.now() > new Date(cached.otpExpiresAt).getTime()) {
+      return {
+        valid: false,
+        error: "OTP code has expired (session validity: 2 minutes). Please click 'Resend OTP' to receive a fresh verification code.",
+      };
+    }
+    return { valid: true, voter: cached };
   }
 
   // Fallback for pre-seeded

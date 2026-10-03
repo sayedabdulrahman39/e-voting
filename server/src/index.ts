@@ -2,6 +2,7 @@ import express, { Request, Response } from "express";
 import cors from "cors";
 import helmet from "helmet";
 import * as dotenv from "dotenv";
+import nodemailer from "nodemailer";
 
 dotenv.config({ path: "../.env" });
 
@@ -11,6 +12,22 @@ const PORT = process.env.PORT || 3001;
 app.use(helmet());
 app.use(cors());
 app.use(express.json());
+
+function getEmailTransporter() {
+  const host = process.env.SMTP_HOST || "smtp.gmail.com";
+  const port = Number(process.env.SMTP_PORT) || 465;
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+
+  if (!user || !pass) return null;
+
+  return nodemailer.createTransport({
+    host,
+    port,
+    secure: port === 465,
+    auth: { user, pass },
+  });
+}
 
 app.get("/", (req: Request, res: Response) => {
   res.json({
@@ -54,11 +71,44 @@ app.post("/api/send-otp", async (req: Request, res: Response) => {
     console.log(`Session Validity: ${expiresInMinutes} minutes (Expires at: ${expiresAt})`);
     console.log("==========================================================");
 
-    // If RESEND_API_KEY or SMTP configured, attempt external dispatch
-    const resendApiKey = process.env.RESEND_API_KEY;
     let externalSent = false;
+    let dispatchMethod = "simulated_local";
 
-    if (resendApiKey) {
+    // 1. Attempt Nodemailer SMTP Dispatch (e.g. Gmail / Outlook / Custom SMTP)
+    const transporter = getEmailTransporter();
+    if (transporter) {
+      try {
+        const fromAddress = process.env.EMAIL_FROM || process.env.SMTP_USER || "noreply@votex-election.org";
+        await transporter.sendMail({
+          from: `"VOTEX Security" <${fromAddress}>`,
+          to: email,
+          subject: `Your VOTEX E-Voting Login Code: ${otpCode}`,
+          html: `
+            <div style="font-family: Arial, sans-serif; background-color: #0f172a; color: #f8fafc; padding: 24px; border-radius: 12px; max-width: 500px; margin: auto;">
+              <h2 style="color: #38bdf8; margin-bottom: 8px;">VOTEX E-Voting Security Code</h2>
+              <p style="color: #94a3b8; font-size: 14px;">Hello <strong>${recipientName}</strong> (${voterId}),</p>
+              <p style="color: #94a3b8; font-size: 14px;">Your one-time verification code for the electronic voting portal is:</p>
+              <div style="background-color: #1e293b; padding: 18px; text-align: center; border-radius: 8px; font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #10b981; margin: 20px 0;">
+                ${otpCode}
+              </div>
+              <p style="color: #ef4444; font-size: 13px; font-weight: bold;">⏱️ This code will expire in ${expiresInMinutes} minutes.</p>
+              <p style="color: #64748b; font-size: 12px; margin-top: 24px; border-top: 1px solid #334155; padding-top: 12px;">
+                If you did not request this login code, please ignore this email. Zero-Knowledge Cryptographic E-Voting Platform.
+              </p>
+            </div>
+          `,
+        });
+        externalSent = true;
+        dispatchMethod = "smtp_nodemailer";
+        console.log(`[Nodemailer SMTP] Email successfully delivered to ${email}`);
+      } catch (smtpErr: any) {
+        console.warn("[Nodemailer SMTP Warning] Failed to dispatch email:", smtpErr.message);
+      }
+    }
+
+    // 2. Fallback: Attempt Resend API Dispatch
+    const resendApiKey = process.env.RESEND_API_KEY;
+    if (!externalSent && resendApiKey) {
       try {
         const response = await fetch("https://api.resend.com/emails", {
           method: "POST",
@@ -88,6 +138,7 @@ app.post("/api/send-otp", async (req: Request, res: Response) => {
         });
         if (response.ok) {
           externalSent = true;
+          dispatchMethod = "resend_api";
           console.log(`[Resend API] Email successfully delivered to ${email}`);
         }
       } catch (emailErr) {
@@ -104,6 +155,7 @@ app.post("/api/send-otp", async (req: Request, res: Response) => {
       expiresAt,
       expiresInSeconds: expiresInMinutes * 60,
       deliveredExternally: externalSent,
+      dispatchMethod,
     });
   } catch (err: any) {
     console.error("send-otp endpoint error:", err);
