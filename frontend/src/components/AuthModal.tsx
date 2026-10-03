@@ -572,7 +572,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <div>
                   <div className="flex justify-between items-center mb-1">
                     <label className="block text-xs font-bold text-slate-300">
-                      Enter Verification Code:
+                      Enter 4-Digit Verification Code:
                     </label>
                     <span className="text-[10px] text-slate-400">
                       {secondsRemaining > 0
@@ -588,10 +588,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       type="text"
                       required
                       autoFocus
+                      maxLength={6}
                       disabled={secondsRemaining === 0}
                       value={voterOtpInput}
                       onChange={(e) => setVoterOtpInput(e.target.value)}
-                      placeholder={secondsRemaining === 0 ? "OTP Expired" : "Enter OTP code"}
+                      placeholder={secondsRemaining === 0 ? "OTP Expired" : "Enter 4-digit code"}
                       className={`glass-input pl-10 text-center text-sm font-mono tracking-widest ${
                         secondsRemaining === 0
                           ? "opacity-50 cursor-not-allowed border-rose-500/50"

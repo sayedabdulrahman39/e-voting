@@ -282,8 +282,8 @@ export async function generateAndSaveVoterOtp(
   voter: VoterRecord,
   expiresInMinutes = 2
 ): Promise<{ otp: string; expiresAt: string; emailDispatched: boolean; updatedVoter: VoterRecord }> {
-  // Generate dynamic 6-digit OTP
-  const dynamicOtp = Math.floor(100000 + Math.random() * 900000).toString();
+  // Generate dynamic 4-digit OTP
+  const dynamicOtp = Math.floor(1000 + Math.random() * 9000).toString();
   const expiresAt = new Date(Date.now() + expiresInMinutes * 60 * 1000).toISOString();
 
   const updatedVoter: VoterRecord = {
