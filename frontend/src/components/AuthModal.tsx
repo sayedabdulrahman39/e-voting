@@ -113,7 +113,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   if (!isOpen) return null;
 
   // Voter ID / Email Check & Send Dynamic OTP
-  const handleVerifyVoterId = async (e: React.FormEvent, forceDynamic = false) => {
+  const handleVerifyVoterId = async (e: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!voterIdInput.trim()) return;
     setErrorMsg(null);
@@ -130,21 +130,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       );
       setIsPreseededVoter(isPreseeded);
 
-      // If voter is manually enrolled, or dynamic OTP is requested:
-      let activeVoter = voter;
-      if (!isPreseeded || forceDynamic) {
-        setEmailSending(true);
-        const { otp, expiresAt, updatedVoter } = await generateAndSaveVoterOtp(voter, 2);
-        setLiveDispatchedOtp(otp);
-        setOtpExpiresAt(expiresAt);
-        setSecondsRemaining(120);
-        setEmailSending(false);
-        activeVoter = updatedVoter;
-      } else {
-        setLiveDispatchedOtp("123");
-        setOtpExpiresAt("");
-        setSecondsRemaining(120);
-      }
+      // Generate fresh dynamic 4-digit OTP and dispatch email for all sign-ins
+      setEmailSending(true);
+      const { otp, expiresAt, updatedVoter } = await generateAndSaveVoterOtp(voter, 2);
+      setLiveDispatchedOtp(otp);
+      setOtpExpiresAt(expiresAt);
+      setSecondsRemaining(120);
+      setEmailSending(false);
+      const activeVoter = updatedVoter;
 
       setFoundVoter(activeVoter);
       setVoterOtpInput("");

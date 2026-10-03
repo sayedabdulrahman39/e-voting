@@ -72,11 +72,68 @@ app.post("/api/send-otp", async (req: Request, res: Response) => {
     console.log("==========================================================");
 
     let externalSent = false;
-    let dispatchMethod = "simulated_local";
+    let dispatchMethod = "console_logged";
 
-    // 1. Attempt Nodemailer SMTP Dispatch (e.g. Gmail / Outlook / Custom SMTP)
+    // 1. Attempt Resend API Dispatch (Direct 4-Digit Code Delivery)
+    const resendApiKey = process.env.RESEND_API_KEY;
+    if (resendApiKey) {
+      try {
+        const fromEmail = process.env.EMAIL_FROM || "VOTEX Security <onboarding@resend.dev>";
+        const response = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${resendApiKey.trim()}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            from: fromEmail,
+            to: [email],
+            subject: `Your VOTEX E-Voting Login Code: ${otpCode}`,
+            html: `
+              <div style="font-family: Arial, sans-serif; background-color: #0f172a; color: #f8fafc; padding: 28px; border-radius: 16px; max-width: 480px; margin: auto; border: 1px solid #334155;">
+                <div style="text-align: center; margin-bottom: 20px;">
+                  <h2 style="color: #38bdf8; margin: 0; font-size: 22px;">VOTEX E-Voting Portal</h2>
+                  <p style="color: #94a3b8; font-size: 13px; margin-top: 4px;">Zero-Knowledge Cryptographic Authentication</p>
+                </div>
+                
+                <div style="background-color: #1e293b; padding: 20px; border-radius: 12px; text-align: center; border: 1px solid #475569;">
+                  <p style="color: #cbd5e1; font-size: 13px; margin-top: 0;">Hello <strong>${recipientName}</strong> (${voterId}),</p>
+                  <p style="color: #94a3b8; font-size: 12px; margin-bottom: 12px;">Your 4-Digit Verification Code is:</p>
+                  
+                  <div style="background-color: #0f172a; padding: 16px; border-radius: 8px; font-size: 38px; font-weight: 800; letter-spacing: 12px; color: #10b981; font-family: monospace; display: inline-block; width: 80%; border: 1px solid #10b981;">
+                    ${otpCode}
+                  </div>
+                  
+                  <p style="color: #f59e0b; font-size: 12px; font-weight: bold; margin-top: 16px; margin-bottom: 0;">
+                    ⏱️ Code valid for ${expiresInMinutes} minutes only.
+                  </p>
+                </div>
+
+                <p style="color: #64748b; font-size: 11px; text-align: center; margin-top: 20px; line-height: 1.5;">
+                  Enter this 4-digit code on the VOTEX portal to log in as a Voter and cast your vote.<br/>
+                  If you did not request this code, please ignore this message.
+                </p>
+              </div>
+            `,
+          }),
+        });
+
+        const resData = await response.json();
+        if (response.ok) {
+          externalSent = true;
+          dispatchMethod = "resend_api";
+          console.log(`[Resend API Success] 4-digit OTP (${otpCode}) sent to ${email}. ID: ${resData.id}`);
+        } else {
+          console.warn("[Resend API Error]:", response.status, JSON.stringify(resData));
+        }
+      } catch (emailErr: any) {
+        console.warn("[Resend API Exception]:", emailErr.message);
+      }
+    }
+
+    // 2. Fallback: Attempt Nodemailer SMTP Dispatch if Resend was not used
     const transporter = getEmailTransporter();
-    if (transporter) {
+    if (!externalSent && transporter) {
       try {
         const fromAddress = process.env.EMAIL_FROM || process.env.SMTP_USER || "noreply@votex-election.org";
         await transporter.sendMail({
@@ -87,14 +144,11 @@ app.post("/api/send-otp", async (req: Request, res: Response) => {
             <div style="font-family: Arial, sans-serif; background-color: #0f172a; color: #f8fafc; padding: 24px; border-radius: 12px; max-width: 500px; margin: auto;">
               <h2 style="color: #38bdf8; margin-bottom: 8px;">VOTEX E-Voting Security Code</h2>
               <p style="color: #94a3b8; font-size: 14px;">Hello <strong>${recipientName}</strong> (${voterId}),</p>
-              <p style="color: #94a3b8; font-size: 14px;">Your one-time verification code for the electronic voting portal is:</p>
-              <div style="background-color: #1e293b; padding: 18px; text-align: center; border-radius: 8px; font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #10b981; margin: 20px 0;">
+              <p style="color: #94a3b8; font-size: 14px;">Your 4-digit verification code is:</p>
+              <div style="background-color: #1e293b; padding: 18px; text-align: center; border-radius: 8px; font-size: 36px; font-weight: bold; letter-spacing: 10px; color: #10b981; margin: 20px 0;">
                 ${otpCode}
               </div>
               <p style="color: #ef4444; font-size: 13px; font-weight: bold;">⏱️ This code will expire in ${expiresInMinutes} minutes.</p>
-              <p style="color: #64748b; font-size: 12px; margin-top: 24px; border-top: 1px solid #334155; padding-top: 12px;">
-                If you did not request this login code, please ignore this email. Zero-Knowledge Cryptographic E-Voting Platform.
-              </p>
             </div>
           `,
         });
@@ -103,46 +157,6 @@ app.post("/api/send-otp", async (req: Request, res: Response) => {
         console.log(`[Nodemailer SMTP] Email successfully delivered to ${email}`);
       } catch (smtpErr: any) {
         console.warn("[Nodemailer SMTP Warning] Failed to dispatch email:", smtpErr.message);
-      }
-    }
-
-    // 2. Fallback: Attempt Resend API Dispatch
-    const resendApiKey = process.env.RESEND_API_KEY;
-    if (!externalSent && resendApiKey) {
-      try {
-        const response = await fetch("https://api.resend.com/emails", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${resendApiKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            from: process.env.EMAIL_FROM || "VOTEX Security <noreply@votex-election.org>",
-            to: [email],
-            subject: `Your VOTEX E-Voting Login Code: ${otpCode}`,
-            html: `
-              <div style="font-family: Arial, sans-serif; background-color: #0f172a; color: #f8fafc; padding: 24px; border-radius: 12px; max-width: 500px; margin: auto;">
-                <h2 style="color: #38bdf8; margin-bottom: 8px;">VOTEX E-Voting Security Code</h2>
-                <p style="color: #94a3b8; font-size: 14px;">Hello <strong>${recipientName}</strong> (${voterId}),</p>
-                <p style="color: #94a3b8; font-size: 14px;">Your one-time verification code for the electronic voting portal is:</p>
-                <div style="background-color: #1e293b; padding: 18px; text-align: center; border-radius: 8px; font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #10b981; margin: 20px 0;">
-                  ${otpCode}
-                </div>
-                <p style="color: #ef4444; font-size: 13px; font-weight: bold;">⏱️ This code will expire in ${expiresInMinutes} minutes.</p>
-                <p style="color: #64748b; font-size: 12px; margin-top: 24px; border-top: 1px solid #334155; padding-top: 12px;">
-                  If you did not request this login code, please ignore this email. Zero-Knowledge Cryptographic E-Voting Platform.
-                </p>
-              </div>
-            `,
-          }),
-        });
-        if (response.ok) {
-          externalSent = true;
-          dispatchMethod = "resend_api";
-          console.log(`[Resend API] Email successfully delivered to ${email}`);
-        }
-      } catch (emailErr) {
-        console.warn("[Email Dispatch Warning] Could not send via Resend API:", emailErr);
       }
     }
 
