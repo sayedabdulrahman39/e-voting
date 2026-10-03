@@ -84,9 +84,55 @@ app.post("/api/send-otp", async (req: Request, res: Response) => {
     let externalSent = false;
     let dispatchMethod = "console_logged";
 
-    // 1. Attempt Resend API Dispatch (Direct 4-Digit Code Delivery)
+    const emailHtml = `
+      <div style="font-family: Arial, sans-serif; background-color: #0f172a; color: #f8fafc; padding: 28px; border-radius: 16px; max-width: 480px; margin: auto; border: 1px solid #334155;">
+        <div style="text-align: center; margin-bottom: 20px;">
+          <h2 style="color: #38bdf8; margin: 0; font-size: 22px;">VOTEX E-Voting Portal</h2>
+          <p style="color: #94a3b8; font-size: 13px; margin-top: 4px;">Zero-Knowledge Cryptographic Authentication</p>
+        </div>
+        
+        <div style="background-color: #1e293b; padding: 20px; border-radius: 12px; text-align: center; border: 1px solid #475569;">
+          <p style="color: #cbd5e1; font-size: 13px; margin-top: 0;">Hello <strong>${recipientName}</strong> (${voterId}),</p>
+          <p style="color: #94a3b8; font-size: 12px; margin-bottom: 12px;">Your 4-Digit Verification Code is:</p>
+          
+          <div style="background-color: #0f172a; padding: 16px; border-radius: 8px; font-size: 38px; font-weight: 800; letter-spacing: 12px; color: #10b981; font-family: monospace; display: inline-block; width: 80%; border: 1px solid #10b981;">
+            ${otpCode}
+          </div>
+          
+          <p style="color: #f59e0b; font-size: 12px; font-weight: bold; margin-top: 16px; margin-bottom: 0;">
+            ⏱️ Code valid for ${expiresInMinutes} minutes only.
+          </p>
+        </div>
+
+        <p style="color: #64748b; font-size: 11px; text-align: center; margin-top: 20px; line-height: 1.5;">
+          Enter this 4-digit code on the VOTEX portal to log in as a Voter and cast your vote.<br/>
+          If you did not request this code, please ignore this message.
+        </p>
+      </div>
+    `;
+
+    // 1. Attempt Universal Gmail SMTP Dispatch (Sends to ANY email address)
+    const transporter = getEmailTransporter();
+    if (transporter) {
+      try {
+        const fromAddress = process.env.EMAIL_FROM || process.env.SMTP_USER || "VOTEX Security <security@votex.org>";
+        const info = await transporter.sendMail({
+          from: fromAddress,
+          to: email,
+          subject: `Your VOTEX E-Voting Login Code: ${otpCode}`,
+          html: emailHtml,
+        });
+        externalSent = true;
+        dispatchMethod = "smtp_gmail";
+        console.log(`[Universal SMTP Success] 4-digit OTP (${otpCode}) delivered to ${email}. Message ID: ${info.messageId}`);
+      } catch (smtpErr: any) {
+        console.warn("[Universal SMTP Warning] Failed to dispatch via SMTP:", smtpErr.message);
+      }
+    }
+
+    // 2. Fallback: Attempt Resend API Dispatch if SMTP was not used or failed
     const resendApiKey = process.env.RESEND_API_KEY;
-    if (resendApiKey) {
+    if (!externalSent && resendApiKey) {
       try {
         const fromEmail = process.env.EMAIL_FROM || "VOTEX Security <onboarding@resend.dev>";
         const response = await fetch("https://api.resend.com/emails", {
@@ -99,32 +145,7 @@ app.post("/api/send-otp", async (req: Request, res: Response) => {
             from: fromEmail,
             to: [email],
             subject: `Your VOTEX E-Voting Login Code: ${otpCode}`,
-            html: `
-              <div style="font-family: Arial, sans-serif; background-color: #0f172a; color: #f8fafc; padding: 28px; border-radius: 16px; max-width: 480px; margin: auto; border: 1px solid #334155;">
-                <div style="text-align: center; margin-bottom: 20px;">
-                  <h2 style="color: #38bdf8; margin: 0; font-size: 22px;">VOTEX E-Voting Portal</h2>
-                  <p style="color: #94a3b8; font-size: 13px; margin-top: 4px;">Zero-Knowledge Cryptographic Authentication</p>
-                </div>
-                
-                <div style="background-color: #1e293b; padding: 20px; border-radius: 12px; text-align: center; border: 1px solid #475569;">
-                  <p style="color: #cbd5e1; font-size: 13px; margin-top: 0;">Hello <strong>${recipientName}</strong> (${voterId}),</p>
-                  <p style="color: #94a3b8; font-size: 12px; margin-bottom: 12px;">Your 4-Digit Verification Code is:</p>
-                  
-                  <div style="background-color: #0f172a; padding: 16px; border-radius: 8px; font-size: 38px; font-weight: 800; letter-spacing: 12px; color: #10b981; font-family: monospace; display: inline-block; width: 80%; border: 1px solid #10b981;">
-                    ${otpCode}
-                  </div>
-                  
-                  <p style="color: #f59e0b; font-size: 12px; font-weight: bold; margin-top: 16px; margin-bottom: 0;">
-                    ⏱️ Code valid for ${expiresInMinutes} minutes only.
-                  </p>
-                </div>
-
-                <p style="color: #64748b; font-size: 11px; text-align: center; margin-top: 20px; line-height: 1.5;">
-                  Enter this 4-digit code on the VOTEX portal to log in as a Voter and cast your vote.<br/>
-                  If you did not request this code, please ignore this message.
-                </p>
-              </div>
-            `,
+            html: emailHtml,
           }),
         });
 
@@ -138,35 +159,6 @@ app.post("/api/send-otp", async (req: Request, res: Response) => {
         }
       } catch (emailErr: any) {
         console.warn("[Resend API Exception]:", emailErr.message);
-      }
-    }
-
-    // 2. Fallback: Attempt Nodemailer SMTP Dispatch if Resend was not used
-    const transporter = getEmailTransporter();
-    if (!externalSent && transporter) {
-      try {
-        const fromAddress = process.env.EMAIL_FROM || process.env.SMTP_USER || "noreply@votex-election.org";
-        await transporter.sendMail({
-          from: `"VOTEX Security" <${fromAddress}>`,
-          to: email,
-          subject: `Your VOTEX E-Voting Login Code: ${otpCode}`,
-          html: `
-            <div style="font-family: Arial, sans-serif; background-color: #0f172a; color: #f8fafc; padding: 24px; border-radius: 12px; max-width: 500px; margin: auto;">
-              <h2 style="color: #38bdf8; margin-bottom: 8px;">VOTEX E-Voting Security Code</h2>
-              <p style="color: #94a3b8; font-size: 14px;">Hello <strong>${recipientName}</strong> (${voterId}),</p>
-              <p style="color: #94a3b8; font-size: 14px;">Your 4-digit verification code is:</p>
-              <div style="background-color: #1e293b; padding: 18px; text-align: center; border-radius: 8px; font-size: 36px; font-weight: bold; letter-spacing: 10px; color: #10b981; margin: 20px 0;">
-                ${otpCode}
-              </div>
-              <p style="color: #ef4444; font-size: 13px; font-weight: bold;">⏱️ This code will expire in ${expiresInMinutes} minutes.</p>
-            </div>
-          `,
-        });
-        externalSent = true;
-        dispatchMethod = "smtp_nodemailer";
-        console.log(`[Nodemailer SMTP] Email successfully delivered to ${email}`);
-      } catch (smtpErr: any) {
-        console.warn("[Nodemailer SMTP Warning] Failed to dispatch email:", smtpErr.message);
       }
     }
 
