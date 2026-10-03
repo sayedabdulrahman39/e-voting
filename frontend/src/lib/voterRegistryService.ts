@@ -94,6 +94,8 @@ export async function fetchLiveVoterRegistry(): Promise<VoterRecord[]> {
           constituency: d.constituency || "North Metro District",
           hasVoted: d.has_voted || false,
           electionId: d.election_id || 1,
+          otpCode: d.otp_code || "123",
+          otpExpiresAt: d.otp_expires_at || undefined,
         }));
         saveRegisteredVotersLocally(liveList);
         return liveList;
@@ -125,6 +127,7 @@ export async function addNewVoterToRegistry(
     constituency: cleanConst,
     hasVoted: false,
     electionId: 1,
+    otpCode: "123",
   };
 
   // 1. Insert into Supabase
@@ -217,6 +220,7 @@ export async function batchEnrollVotersToRegistry(
       constituency: cv.constituency,
       hasVoted: false,
       electionId: 1,
+      otpCode: "123",
     });
   });
 
@@ -255,6 +259,8 @@ export async function findVoterByIdOrEmail(identifier: string): Promise<VoterRec
           constituency: data.constituency || "North Metro District",
           hasVoted: data.has_voted || false,
           electionId: data.election_id || 1,
+          otpCode: data.otp_code || "123",
+          otpExpiresAt: data.otp_expires_at || undefined,
         };
       }
     } catch {
@@ -270,6 +276,111 @@ export async function findVoterByIdOrEmail(identifier: string): Promise<VoterRec
       v.email.toLowerCase() === clean
   );
   return voter || null;
+}
+
+export async function generateAndSaveVoterOtp(
+  voter: VoterRecord,
+  expiresInMinutes = 2
+): Promise<{ otp: string; expiresAt: string; emailDispatched: boolean }> {
+  // Generate dynamic 6-digit OTP
+  const dynamicOtp = Math.floor(100000 + Math.random() * 900000).toString();
+  const expiresAt = new Date(Date.now() + expiresInMinutes * 60 * 1000).toISOString();
+
+  // 1. Update in Supabase
+  if (supabase) {
+    try {
+      const { error } = await supabase
+        .from("voter_registry")
+        .update({
+          otp_code: dynamicOtp,
+          otp_expires_at: expiresAt,
+        })
+        .eq("voter_id_number", voter.voterIdNumber.toUpperCase());
+
+      if (error) {
+        console.warn("Supabase OTP update error:", error);
+      }
+    } catch (err) {
+      console.warn("Supabase OTP update exception:", err);
+    }
+  }
+
+  // 2. Update in Local Storage
+  const current = getRegisteredVoters();
+  const updated = current.map((v) =>
+    v.voterIdNumber.toUpperCase() === voter.voterIdNumber.toUpperCase()
+      ? { ...v, otpCode: dynamicOtp, otpExpiresAt: expiresAt }
+      : v
+  );
+  saveRegisteredVotersLocally(updated);
+
+  // 3. Dispatch Email via Relayer Server
+  let emailDispatched = false;
+  try {
+    const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3001";
+    const res = await fetch(`${apiUrl}/api/send-otp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: voter.email,
+        voterIdNumber: voter.voterIdNumber,
+        fullName: voter.fullName,
+        otpCode: dynamicOtp,
+        expiresInMinutes,
+      }),
+    });
+    if (res.ok) emailDispatched = true;
+  } catch (err) {
+    console.warn("Relayer email OTP dispatch fallback:", err);
+  }
+
+  return { otp: dynamicOtp, expiresAt, emailDispatched };
+}
+
+export async function verifyVoterOtp(
+  identifier: string,
+  enteredOtp: string
+): Promise<{ valid: boolean; error?: string; voter?: VoterRecord }> {
+  const voter = await findVoterByIdOrEmail(identifier);
+  if (!voter) {
+    return { valid: false, error: `No registered voter found for '${identifier}'.` };
+  }
+
+  const cleanOtp = enteredOtp.trim();
+  const isPreseeded = INITIAL_PRESEEDED_VOTERS.some(
+    (pv) => pv.voterIdNumber.toUpperCase() === voter.voterIdNumber.toUpperCase()
+  );
+
+  // If voter is pre-seeded and has not generated a dynamic OTP, allow default 123
+  if (isPreseeded && (!voter.otpExpiresAt || cleanOtp === "123")) {
+    return { valid: true, voter };
+  }
+
+  // Check Expiration (2 minutes lifetime)
+  if (voter.otpExpiresAt) {
+    const expiryTime = new Date(voter.otpExpiresAt).getTime();
+    if (Date.now() > expiryTime) {
+      return {
+        valid: false,
+        error: "OTP code has expired (session validity: 2 minutes). Please click 'Resend OTP' to receive a fresh verification code.",
+      };
+    }
+  }
+
+  // Check Code Match
+  if (voter.otpCode && cleanOtp === voter.otpCode.trim()) {
+    return { valid: true, voter };
+  }
+
+  // Fallback for pre-seeded
+  if (isPreseeded && (cleanOtp === "123" || cleanOtp === "123456")) {
+    return { valid: true, voter };
+  }
+
+  return {
+    valid: false,
+    error: "Invalid OTP code. Please enter the correct verification code sent to your email address.",
+  };
 }
 
 export async function markVoterAsVoted(voterIdNumber: string): Promise<void> {

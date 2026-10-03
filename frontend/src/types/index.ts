@@ -61,6 +61,8 @@ export interface VoterRecord {
   constituency: string;
   hasVoted: boolean;
   electionId: number;
+  otpCode?: string;
+  otpExpiresAt?: string;
 }
 
 export interface VoterIdentity {

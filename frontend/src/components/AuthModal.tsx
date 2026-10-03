@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Vote,
   UserCheck,
@@ -14,12 +14,17 @@ import {
   CreditCard,
   MapPin,
   Sparkles,
+  Clock,
+  RefreshCw,
 } from "lucide-react";
 import { UserRole, CONSTITUENCIES, VoterRecord } from "../types";
 import {
   findVoterByIdOrEmail,
   fetchLiveVoterRegistry,
   getRegisteredVoters,
+  generateAndSaveVoterOtp,
+  verifyVoterOtp,
+  INITIAL_PRESEEDED_VOTERS,
 } from "../lib/voterRegistryService";
 import {
   registerCandidateInDB,
@@ -62,16 +67,34 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [voterIdInput, setVoterIdInput] = useState("");
   const [voterOtpInput, setVoterOtpInput] = useState("");
   const [otpSent, setOtpSent] = useState(false);
-  const [foundVoter, setFoundVoter] = useState<any | null>(null);
+  const [foundVoter, setFoundVoter] = useState<VoterRecord | null>(null);
   const [votersList, setVotersList] = useState<VoterRecord[]>(() => getRegisteredVoters());
 
-  React.useEffect(() => {
+  // Dynamic OTP Session & Countdown States (2 Minutes Lifetime)
+  const [secondsRemaining, setSecondsRemaining] = useState(120);
+  const [liveDispatchedOtp, setLiveDispatchedOtp] = useState<string>("");
+  const [otpExpiresAt, setOtpExpiresAt] = useState<string>("");
+  const [isPreseededVoter, setIsPreseededVoter] = useState(false);
+  const [emailSending, setEmailSending] = useState(false);
+
+  useEffect(() => {
     if (isOpen) {
       fetchLiveVoterRegistry().then((list) => {
         if (list && list.length > 0) setVotersList(list);
       });
     }
   }, [isOpen]);
+
+  // 2-Minute (120s) OTP Expiration Countdown Timer
+  useEffect(() => {
+    let timer: NodeJS.Timeout;
+    if (otpSent && secondsRemaining > 0) {
+      timer = setInterval(() => {
+        setSecondsRemaining((prev) => Math.max(0, prev - 1));
+      }, 1000);
+    }
+    return () => clearInterval(timer);
+  }, [otpSent, secondsRemaining]);
 
   // Candidate States (Sign up vs Sign in)
   const [isCandidateSignUp, setIsCandidateSignUp] = useState(true);
@@ -89,9 +112,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
   if (!isOpen) return null;
 
-  // Voter ID / Email Check & Send OTP
-  const handleVerifyVoterId = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Voter ID / Email Check & Send Dynamic OTP
+  const handleVerifyVoterId = async (e: React.FormEvent, forceDynamic = false) => {
+    if (e) e.preventDefault();
     if (!voterIdInput.trim()) return;
     setErrorMsg(null);
     setLoading(true);
@@ -102,38 +125,84 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         throw new Error(`No voter record found for '${voterIdInput.trim()}'. Please verify your Voter ID or Email address.`);
       }
 
+      const isPreseeded = INITIAL_PRESEEDED_VOTERS.some(
+        (pv) => pv.voterIdNumber.toUpperCase() === voter.voterIdNumber.toUpperCase()
+      );
+      setIsPreseededVoter(isPreseeded);
+
+      // If voter is manually enrolled, or dynamic OTP is requested:
+      if (!isPreseeded || forceDynamic) {
+        setEmailSending(true);
+        const { otp, expiresAt } = await generateAndSaveVoterOtp(voter, 2);
+        setLiveDispatchedOtp(otp);
+        setOtpExpiresAt(expiresAt);
+        setSecondsRemaining(120);
+        setEmailSending(false);
+      } else {
+        setLiveDispatchedOtp("123");
+        setOtpExpiresAt("");
+        setSecondsRemaining(120);
+      }
+
       setFoundVoter(voter);
+      setVoterOtpInput("");
       setOtpSent(true);
     } catch (err: any) {
       setErrorMsg(err.message || "Failed to verify Voter identity.");
     } finally {
       setLoading(false);
+      setEmailSending(false);
+    }
+  };
+
+  // Resend OTP Action (Refreshes DB OTP and restarts 2-min timer)
+  const handleResendOtp = async () => {
+    if (!foundVoter) return;
+    setErrorMsg(null);
+    setEmailSending(true);
+
+    try {
+      const { otp, expiresAt } = await generateAndSaveVoterOtp(foundVoter, 2);
+      setLiveDispatchedOtp(otp);
+      setOtpExpiresAt(expiresAt);
+      setSecondsRemaining(120);
+      setVoterOtpInput("");
+    } catch (err: any) {
+      setErrorMsg(err.message || "Failed to resend verification OTP.");
+    } finally {
+      setEmailSending(false);
     }
   };
 
   // Voter OTP Verification
-  const handleVerifyVoterOtp = (e: React.FormEvent) => {
+  const handleVerifyVoterOtp = async (e: React.FormEvent) => {
     e.preventDefault();
-    setErrorMsg(null);
-
-    if (voterOtpInput.trim() !== "123" && voterOtpInput.trim() !== "123456") {
-      setErrorMsg("Invalid OTP code. Please enter '123' to authenticate.");
-      return;
-    }
-
     if (!foundVoter) return;
+    setErrorMsg(null);
+    setLoading(true);
 
-    const voterUser: AuthUser = {
-      id: foundVoter.id,
-      email: foundVoter.email,
-      fullName: foundVoter.fullName,
-      role: "VOTER",
-      voterIdNumber: foundVoter.voterIdNumber,
-      constituency: foundVoter.constituency,
-    };
+    try {
+      const result = await verifyVoterOtp(foundVoter.voterIdNumber, voterOtpInput);
+      if (!result.valid) {
+        throw new Error(result.error || "Invalid or expired OTP code.");
+      }
 
-    onLoginSuccess(voterUser);
-    onClose();
+      const voterUser: AuthUser = {
+        id: foundVoter.id,
+        email: foundVoter.email,
+        fullName: foundVoter.fullName,
+        role: "VOTER",
+        voterIdNumber: foundVoter.voterIdNumber,
+        constituency: foundVoter.constituency,
+      };
+
+      onLoginSuccess(voterUser);
+      onClose();
+    } catch (err: any) {
+      setErrorMsg(err.message || "OTP verification failed.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   // Candidate Registration or Login
@@ -405,39 +474,110 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 </div>
               </form>
             ) : (
-              /* Step 2: Enter OTP */
+              /* Step 2: Enter Dynamic Email OTP */
               <form onSubmit={handleVerifyVoterOtp} className="space-y-4">
                 <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl space-y-2 text-xs">
-                  <div className="flex items-center space-x-1.5 text-emerald-400 font-bold text-xs">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                    <span>OTP Dispatched to Your Email!</span>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-1.5 text-emerald-400 font-bold text-xs">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                      <span>Security OTP Dispatched!</span>
+                    </div>
+                    {/* 2-Min Countdown Badge */}
+                    <div
+                      className={`flex items-center space-x-1 font-mono text-[11px] px-2.5 py-0.5 rounded-full font-bold border ${
+                        secondsRemaining > 30
+                          ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
+                          : secondsRemaining > 0
+                          ? "bg-amber-500/20 text-amber-300 border-amber-500/40 animate-pulse"
+                          : "bg-rose-500/20 text-rose-300 border-rose-500/40"
+                      }`}
+                    >
+                      <Clock className="w-3 h-3" />
+                      <span>
+                        {secondsRemaining > 0
+                          ? `${Math.floor(secondsRemaining / 60)}:${(secondsRemaining % 60)
+                              .toString()
+                              .padStart(2, "0")}`
+                          : "Expired"}
+                      </span>
+                    </div>
                   </div>
-                  <p className="text-[11px] text-slate-300">
-                    A 3-digit security code has been sent to <strong className="text-cyan-300 font-mono">{foundVoter?.email}</strong>.
+
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    A secure verification code has been dispatched to{" "}
+                    <strong className="text-cyan-300 font-mono">{foundVoter?.email}</strong>.
                   </p>
+
+                  {/* 2-Min Countdown Progress Bar */}
+                  <div className="w-full bg-slate-800/80 rounded-full h-1.5 overflow-hidden mt-1">
+                    <div
+                      className={`h-full transition-all duration-1000 ${
+                        secondsRemaining > 30
+                          ? "bg-emerald-400"
+                          : secondsRemaining > 0
+                          ? "bg-amber-400"
+                          : "bg-rose-500"
+                      }`}
+                      style={{ width: `${(secondsRemaining / 120) * 100}%` }}
+                    />
+                  </div>
                 </div>
 
-                <div className="p-4 glass rounded-2xl space-y-2 text-xs border border-white/10">
+                {/* Voter Credentials Summary Card */}
+                <div className="p-3.5 glass rounded-2xl space-y-1.5 text-xs border border-white/10">
                   <div className="flex items-center justify-between">
-                    <span className="text-slate-400 font-medium">Voter:</span>
-                    <span className="font-bold text-white">{foundVoter?.fullName}</span>
+                    <span className="text-slate-400 font-medium text-[11px]">Voter Name:</span>
+                    <span className="font-bold text-white text-[11px]">{foundVoter?.fullName}</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-slate-400 font-medium">Voter ID:</span>
-                    <span className="font-mono text-cyan-400 font-bold">{foundVoter?.voterIdNumber}</span>
+                    <span className="text-slate-400 font-medium text-[11px]">Voter ID:</span>
+                    <span className="font-mono text-cyan-400 font-bold text-[11px]">
+                      {foundVoter?.voterIdNumber}
+                    </span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-slate-400 font-medium">Constituency:</span>
-                    <span className="text-slate-200 font-semibold">{foundVoter?.constituency}</span>
+                    <span className="text-slate-400 font-medium text-[11px]">Constituency:</span>
+                    <span className="text-slate-200 font-semibold text-[11px]">
+                      {foundVoter?.constituency}
+                    </span>
                   </div>
                 </div>
 
+                {/* Live Email Notification / Quick-Fill Card */}
+                {liveDispatchedOtp && (
+                  <div className="p-3 rounded-2xl bg-cyan-950/40 border border-cyan-500/30 flex items-center justify-between text-xs">
+                    <div className="space-y-0.5">
+                      <span className="text-[10px] text-cyan-300 font-bold uppercase tracking-wider flex items-center gap-1">
+                        <Mail className="w-3 h-3 text-cyan-400" />
+                        {liveDispatchedOtp === "123" ? "Pre-Seeded Demo OTP" : "Dispatched Dynamic OTP"}
+                      </span>
+                      <div className="font-mono text-xs font-extrabold text-white tracking-wider">
+                        Code: <span className="text-emerald-400">{liveDispatchedOtp}</span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setVoterOtpInput(liveDispatchedOtp)}
+                      className="btn-secondary py-1 px-2.5 text-[10px] text-cyan-300 font-semibold hover:text-white"
+                    >
+                      Autofill Code
+                    </button>
+                  </div>
+                )}
+
+                {/* OTP Input Field */}
                 <div>
                   <div className="flex justify-between items-center mb-1">
                     <label className="block text-xs font-bold text-slate-300">
-                      Enter Verification OTP:
+                      Enter Verification Code:
                     </label>
-                    <span className="badge-amber text-[10px]">Default OTP: 123</span>
+                    <span className="text-[10px] text-slate-400">
+                      {secondsRemaining > 0
+                        ? otpExpiresAt
+                          ? `Expires: ${new Date(otpExpiresAt).toLocaleTimeString()}`
+                          : "Session active (2 mins)"
+                        : "Code expired"}
+                    </span>
                   </div>
                   <div className="relative">
                     <KeyRound className="w-4 h-4 text-emerald-400 absolute left-3.5 top-3" />
@@ -445,28 +585,69 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       type="text"
                       required
                       autoFocus
+                      disabled={secondsRemaining === 0}
                       value={voterOtpInput}
                       onChange={(e) => setVoterOtpInput(e.target.value)}
-                      placeholder="Enter 123"
-                      className="glass-input pl-10 text-center text-sm font-mono tracking-widest border-emerald-400/60 focus:border-emerald-400"
+                      placeholder={secondsRemaining === 0 ? "OTP Expired" : "Enter OTP code"}
+                      className={`glass-input pl-10 text-center text-sm font-mono tracking-widest ${
+                        secondsRemaining === 0
+                          ? "opacity-50 cursor-not-allowed border-rose-500/50"
+                          : "border-emerald-400/60 focus:border-emerald-400"
+                      }`}
                     />
                   </div>
                 </div>
 
-                <div className="flex space-x-2">
+                {/* Resend OTP Bar */}
+                <div className="flex items-center justify-between pt-1 text-xs">
                   <button
                     type="button"
-                    onClick={() => setOtpSent(false)}
+                    onClick={handleResendOtp}
+                    disabled={emailSending}
+                    className="text-cyan-400 hover:text-cyan-300 font-bold flex items-center space-x-1 text-[11px] transition-colors"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${emailSending ? "animate-spin" : ""}`} />
+                    <span>{emailSending ? "Dispatching..." : "Resend New OTP (2 Mins)"}</span>
+                  </button>
+
+                  {isPreseededVoter && liveDispatchedOtp !== "123" && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLiveDispatchedOtp("123");
+                        setVoterOtpInput("123");
+                        setSecondsRemaining(120);
+                      }}
+                      className="text-slate-400 hover:text-slate-200 text-[10px]"
+                    >
+                      Use Demo "123"
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex space-x-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOtpSent(false);
+                      setSecondsRemaining(120);
+                      setErrorMsg(null);
+                    }}
                     className="btn-secondary w-1/3 py-3 text-xs"
                   >
                     Back
                   </button>
                   <button
                     type="submit"
-                    className="btn-success w-2/3 py-3 text-xs flex items-center justify-center space-x-2"
+                    disabled={loading || !voterOtpInput.trim() || secondsRemaining === 0}
+                    className={`w-2/3 py-3 text-xs flex items-center justify-center space-x-2 ${
+                      secondsRemaining === 0
+                        ? "btn-secondary opacity-50 cursor-not-allowed"
+                        : "btn-success"
+                    }`}
                   >
                     <CheckCircle2 className="w-4 h-4" />
-                    <span>Verify OTP & Sign In</span>
+                    <span>{loading ? "Verifying..." : "Verify OTP & Sign In"}</span>
                   </button>
                 </div>
               </form>
