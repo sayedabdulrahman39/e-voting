@@ -1,5 +1,5 @@
 import { VoterRecord } from "../types";
-import { supabase } from "./supabaseService";
+import { supabase, sendSupabaseEmailOtp } from "./supabaseService";
 
 export const INITIAL_PRESEEDED_VOTERS: VoterRecord[] = [
   {
@@ -325,8 +325,18 @@ export async function generateAndSaveVoterOtp(
     : [...current, updatedVoter];
   saveRegisteredVotersLocally(updatedList);
 
-  // 3. Dispatch Email via Relayer Server
+  // 3. Dispatch Email via Supabase Auth & Relayer Server
   let emailDispatched = false;
+
+  // Supabase Auth Email OTP Trigger
+  try {
+    const supaRes = await sendSupabaseEmailOtp(voter.email);
+    if (supaRes.success) emailDispatched = true;
+  } catch (supaErr) {
+    console.warn("Supabase Auth email OTP trigger note:", supaErr);
+  }
+
+  // Relayer Server Email Dispatch Trigger
   try {
     const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3001";
     const res = await fetch(`${apiUrl}/api/send-otp`, {

@@ -16,6 +16,27 @@ export const supabase = isSupabaseConfigured
   ? createClient(supabaseUrl, supabaseAnonKey)
   : null;
 
+// ─── Supabase Native Email OTP Dispatch ────────────────────────────────────
+export async function sendSupabaseEmailOtp(email: string): Promise<{ success: boolean; error?: string }> {
+  if (!supabase) return { success: false, error: "Supabase is not configured." };
+  try {
+    const { error } = await supabase.auth.signInWithOtp({
+      email: email.trim(),
+      options: {
+        shouldCreateUser: true,
+      },
+    });
+    if (error) {
+      console.warn("Supabase signInWithOtp note:", error.message);
+      return { success: false, error: error.message };
+    }
+    return { success: true };
+  } catch (err: any) {
+    console.warn("Supabase signInWithOtp exception:", err);
+    return { success: false, error: err.message || "Failed to trigger Supabase email OTP." };
+  }
+}
+
 // ─── Election CRUD ───────────────────────────────────────────────────────────
 
 export async function createElectionInDB(
