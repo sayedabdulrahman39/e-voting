@@ -21,11 +21,21 @@ function getEmailTransporter() {
 
   if (!user || !pass) return null;
 
+  if (host.includes("gmail") || user.includes("@gmail.com")) {
+    return nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: user.trim(),
+        pass: pass.trim().replace(/\s+/g, ""), // removes spaces if copied from Google App Password
+      },
+    });
+  }
+
   return nodemailer.createTransport({
     host,
     port,
     secure: port === 465,
-    auth: { user, pass },
+    auth: { user: user.trim(), pass: pass.trim() },
   });
 }
 
