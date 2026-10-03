@@ -539,27 +539,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   </div>
                 </div>
 
-                {/* Live Email Notification / Quick-Fill Card */}
-                {liveDispatchedOtp && (
-                  <div className="p-3 rounded-2xl bg-cyan-950/40 border border-cyan-500/30 flex items-center justify-between text-xs">
-                    <div className="space-y-0.5">
-                      <span className="text-[10px] text-cyan-300 font-bold uppercase tracking-wider flex items-center gap-1">
-                        <Mail className="w-3 h-3 text-cyan-400" />
-                        {liveDispatchedOtp === "123" ? "Pre-Seeded Demo OTP" : "Dispatched Dynamic OTP"}
-                      </span>
-                      <div className="font-mono text-xs font-extrabold text-white tracking-wider">
-                        Code: <span className="text-emerald-400">{liveDispatchedOtp}</span>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setVoterOtpInput(liveDispatchedOtp)}
-                      className="btn-secondary py-1 px-2.5 text-[10px] text-cyan-300 font-semibold hover:text-white"
-                    >
-                      Autofill Code
-                    </button>
-                  </div>
-                )}
 
                 {/* OTP Input Field */}
                 <div>
